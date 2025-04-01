@@ -21,8 +21,9 @@
 [cmdletbinding()]
 
 param (
-    [parameter(Mandatory)][string]$SourceFolder,
-    [parameter(Mandatory)][string]$DestinationFolder
+    [parameter(Mandatory=$true)][string]$SourceFolder,
+    [parameter(Mandatory=$true)][string]$DestinationFolder,
+    [parameter(Mandatory=$false)][switch]$GenerateMetaFile
 )
 
 $ErrorActionPreference = 'stop'
@@ -36,12 +37,6 @@ try {
     Write-Output "Validating destination folder: $DestinationFolder"
     if (-not (Test-Path $DestinationFolder)) {
         New-Item -ItemType Directory -Path $DestinationFolder | Out-Null
-    }
-
-    Write-Output "Validating meta.txt file exists within the source folder"
-    $metaPath = Join-Path $SourceFolder "meta.txt"
-    if (-not (Test-Path $metaPath)) {
-        Write-Error "meta.txt file does not exist in source folder"
     }
 
     Write-Output "Validating .png files within source folder"
@@ -65,9 +60,11 @@ try {
     Add-Type -AssemblyName System.Drawing
 
     Write-Output "Processing .png files"
+    $index = 0
+    $FrameOrder = ""
     foreach ($file in ($FrameFiles | Sort-Object Name)) {
         $inputPath = $file.FullName
-        $outputPath = Join-Path $DestinationFolder ($file.BaseName + ".bm")
+        $outputPath = "$DestinationFolder\frame_$index.bm"
 
         $bitmap = [System.Drawing.Bitmap]::FromFile($inputPath)
 
@@ -114,17 +111,48 @@ try {
 
         [System.IO.File]::WriteAllBytes($outputPath, $finalBytes.ToArray())
         Write-Output "Converted: $($file.Name)"
+        $FrameOrder += "$index "
+        $index++
     }
-    
-    # Use a StreamReader to safely load the file with its actual encoding
-    Write-Output "Fixing and copying meta.txt to destination folder"
-    $reader = New-Object System.IO.StreamReader("$($SourceFolder)\meta.txt", $true)  # $true = detect encoding
-    $metaContent = $reader.ReadToEnd()
-    $reader.Close()
-    
-    # Write it out as UTF-8 without BOM
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)  # $false = no BOM
-    [System.IO.File]::WriteAllText("$($DestinationFolder)\meta.txt", $metaContent, $utf8NoBom)
+
+    if ($GenerateMetaFile) {
+        Write-Output "Generating meta.txt file"
+        $FrameOrder += "0"
+        $PassiveFrames = ($FrameFiles | Measure-Object).Count
+        $MetaFileTemplate = @"
+Filetype: Flipper Animation
+Version: 1
+
+Width: 128
+Height: 64
+Passive frames: $PassiveFrames
+Active frames: 1
+Frames order: $FrameOrder
+Active cycles: 1
+Frame rate: 4
+Duration: 3600
+Active cooldown: 5
+
+Bubble slots: 0
+"@
+        $MetaFileTemplate | Out-File -FilePath "$DestinationFolder\meta.txt" -Encoding utf8 -Force
+    }
+    else {
+        # Check if meta file already exists
+        if (Test-Path "$SourceFolder\meta.txt") {
+            # Ensure meta file is encoded correctly as UTF-8 and move the file to the destination
+
+            # Use a StreamReader to safely load the file with its actual encoding
+            Write-Output "Copying meta.txt to destination folder"
+            $reader = New-Object System.IO.StreamReader("$($SourceFolder)\meta.txt", $true)  # $true = detect encoding
+            $metaContent = $reader.ReadToEnd()
+            $reader.Close()
+            
+            # Write it out as UTF-8 without BOM
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)  # $false = no BOM
+            [System.IO.File]::WriteAllText("$($DestinationFolder)\meta.txt", $metaContent, $utf8NoBom)
+        }
+    }
 
     Write-Host -ForegroundColor Green "Finished"
 }
