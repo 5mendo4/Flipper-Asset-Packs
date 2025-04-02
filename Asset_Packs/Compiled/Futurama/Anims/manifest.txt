@@ -1,7 +1,7 @@
 Filetype: Flipper Animation Manifest
 Version: 1
 
-Name: Bender_Overclock_128x64
+Name: Gundam_Bender_128x64
 Min butthurt: 0
 Max butthurt: 18
 Min level: 1
