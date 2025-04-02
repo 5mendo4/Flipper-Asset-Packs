@@ -1,4 +1,4 @@
-﻿Filetype: Flipper Animation
+Filetype: Flipper Animation
 Version: 1
 
 Width: 128

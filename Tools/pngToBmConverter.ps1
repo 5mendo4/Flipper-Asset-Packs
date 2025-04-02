@@ -68,6 +68,10 @@ try {
 
         $bitmap = [System.Drawing.Bitmap]::FromFile($inputPath)
 
+        $forcedBitmap = $bitmap.Clone([System.Drawing.Rectangle]::FromLTRB(0, 0, $bitmap.Width, $bitmap.Height), [System.Drawing.Imaging.PixelFormat]::Format1bppIndexed)
+        $bitmap.Dispose()
+        $bitmap = $forcedBitmap
+
         if ($bitmap.PixelFormat -ne 'Format1bppIndexed') {
             Write-Warning "Image is not 1-bit: $inputPath"
             continue
@@ -135,7 +139,9 @@ Active cooldown: 5
 
 Bubble slots: 0
 "@
-        $MetaFileTemplate | Out-File -FilePath "$DestinationFolder\meta.txt" -Encoding utf8 -Force
+    
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText("$DestinationFolder\meta.txt", $MetaFileTemplate, $utf8NoBom)
     }
     else {
         # Check if meta file already exists
