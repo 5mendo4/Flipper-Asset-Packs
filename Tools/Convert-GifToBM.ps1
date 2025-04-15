@@ -7,29 +7,37 @@
     Users can leverage various parameters to customize the functionality and asthetics of the animation. 
     The script is mostly self-containing but does rely on an accompanying portable ImageMagick client app for some workloads. 
 
-.PARAMETER EdgeDetection
-    Enables edge detection filter before conversion (default: true).
+.PARAMETER GifPath
+    Specify the file path of the .gif file that will be converted.
+    If this is not specified, an interactive file picker will be displayed.
+
+.PARAMETER OutputFolder
+    Specify the folder path where the .bm and meta file will be output to.
+    If this is not specified, an interactive folder picker will be displayed.
+    If the specified folder does not end with _128x64, a folder with that string appended on the end of your specified folder will be created.
+
+.PARAMETER PreviewGif
+    Specify to output a preview.gif file and automatically open it.
 
 .PARAMETER Invert
-    Inverts image colors (default: false).
-
-.PARAMETER Dither
-    Enables Floyd-Steinberg dithering (default: true).
-
-.PARAMETER Sharpen
-    Applies sharpening filter (default: true).
-
-.PARAMETER SharpenAmount
-    Sharpness level passed to ImageMagick (default: "1x1").
-
-.PARAMETER ContrastStretch
-    Contrast adjustment level (default: "7%x7%").
-
-.PARAMETER Grayscale
-    Converts image to grayscale (default: true).
+    Inverts image colors.
 
 .PARAMETER Monochrome
-    Converts image to monochrome (1-bit) (default: true).
+    Converts image into either solid black or solid white colors.
+
+.PARAMETER EdgeDetection
+    Highlights the boundaries and outlines within an image by detecting areas with sharp contrast like where a dark object meets a light background.
+    A lower number will pick up faint edges but may make an image more noisy.
+    A higher number will pick up more contrast edges and produce smoother but thicker lines.
+
+.PARAMETER Binarization
+    The threshold a pixel has to be before it becomes black or white (default: .5).
+    
+    Example A: At a .5 binarization, any pixel lighter than .5 becomes white.
+    Any pixel darker than .5 becomes black.
+
+    Example B: At a .8 binarization, most pixels will be lighter than the threshold so they will all be converted to white
+    This results in a mostly white image.
 
 .PARAMETER ActiveCycles
     Number of times active frames should cycle before returning to passive (default: 1).
@@ -47,17 +55,18 @@
     Number of frames that play during active mode (default: 0).
 
 .PARAMETER BubbleLocale
-    Placement of a speech bubble. Options: center, bottomcenter, topcenter, leftcenter,
-    rightcenter, bottomright, topright, bottomleft, topleft.
+    Placement of a speech bubble.
 
 .PARAMETER BubbleText
     Text for the speech bubble. Use `n for new lines.
 
 .PARAMETER StartFrame
     Frame index at which the speech bubble appears (default: 0).
+    If you want the bubble text to show up later, increase this number.
 
 .PARAMETER EndFrame
     Frame index at which the speech bubble disappears (default: 0).
+    If you want the bubble text to end sooner, set it below the max number of frames.
 
 .EXAMPLE
     .\gifToFlipperAsset.ps1
@@ -87,16 +96,18 @@
 [CmdletBinding()]
 
 param (
-    # === Visual Parameters ===
-    [bool]$EdgeDetection = $true,
-    [bool]$Invert = $false,
-    [bool]$Dither = $true,
-    [bool]$Sharpen = $true,
-    [string]$SharpenAmount = "1x1",
-    [string]$ContrastStretch = "7%x7%",
-    [bool]$Grayscale = $true,
-    [bool]$Monochrome = $true,
+    # === Interactive Parameters ===
+    [string]$GifPath,
+    [string]$OutputFolder,
+    [switch]$PreviewGif,
 
+    # === Effect Parameters ===
+    [switch]$Invert,
+    [switch]$Monochrome,
+    [int]$EdgeDetection,
+    [validateset(.1,.2,.3,.4,.5,.6,.7,.8,.9)]
+    [double]$Binarization = .5,
+    
     # === Functional Parameters ===
     [int]$ActiveCycles = 1,
     [int]$FrameRate = 4,
@@ -119,49 +130,73 @@ if ($PSVersionTable.PSVersion.Major -lt 5 -or ($PSVersionTable.PSVersion.Major -
     exit
 }
 
-# Add required assembly for windows form and dialog boxes
-Write-Verbose "Adding required .net assemblies"
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+if (!$GifPath -or !$OutputFolder) {
+    # Add required assembly for windows form and dialog boxes
+    Write-Verbose "Adding required .net assemblies"
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
 
-# Create a top-most dummy form to use as a parent window
-$topForm = New-Object System.Windows.Forms.Form
-$topForm.TopMost = $true
-$topForm.WindowState = 'Minimized'
-$topForm.ShowInTaskbar = $false
-$null = $topForm.Show()
+    # Create a top-most dummy form to use as a parent window
+    $topForm = New-Object System.Windows.Forms.Form
+    $topForm.TopMost = $true
+    $topForm.WindowState = 'Minimized'
+    $topForm.ShowInTaskbar = $false
+    $null = $topForm.Show()
 
-# Open File Dialog for GIF selection
-Write-Verbose "Prompting user for file selection"
-$openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-$openFileDialog.Filter = "GIF files (*.gif)|*.gif"
-$openFileDialog.Title = "Select a GIF to convert"
-if ($openFileDialog.ShowDialog($topForm) -ne [System.Windows.Forms.DialogResult]::OK) {
-    Write-Error "No GIF selected. Exiting."
+    if (!$GifPath) {
+        # Open File Dialog for GIF selection
+        Write-Verbose "Prompting user for file selection"
+        $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+        $openFileDialog.Filter = "GIF files (*.gif)|*.gif"
+        $openFileDialog.Title = "Select a GIF to convert"
+        if ($openFileDialog.ShowDialog($topForm) -ne [System.Windows.Forms.DialogResult]::OK) {
+            Write-Error "No GIF selected. Exiting."
+            $topForm.Close()
+            exit
+        }
+        $GifPath = $openFileDialog.FileName
+    }
+    else {
+        if (Test-Path $GifPath) {
+            $WorkingDir = Split-Path $GifPath
+        }
+        else {
+            Write-Error "Specified GifPath file not found"
+            exit
+        }
+    }
+
+    if (!$OutputFolder) {
+        # Open Folder Dialog for Output selection
+        Write-Verbose "Prompting user for folder save location"
+        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderBrowser.Description = "Select the output folder for the Flipper Asset Pack"
+        $folderBrowser.SelectedPath = [System.IO.Path]::GetDirectoryName($GifPath)  # Set default to GIF's folder
+        if ($folderBrowser.ShowDialog($topForm) -ne [System.Windows.Forms.DialogResult]::OK) {
+            Write-Error "No output folder selected. Exiting."
+            $topForm.Close()
+            exit
+        }
+        $selectedFolder = $folderBrowser.SelectedPath
+    }
+    else {
+        if (Test-Path $OutputFolder) {
+            $selectedFolder = $OutputFolder
+        }
+        else {
+            Write-Error "Specified OutputFolder directory not found"
+            exit
+        }
+    }
+
+    # Cleanup the dummy form
     $topForm.Close()
-    exit
 }
-$GifPath = $openFileDialog.FileName
-
-# Open Folder Dialog for Output selection
-Write-Verbose "Prompting user for folder save location"
-$folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-$folderBrowser.Description = "Select the output folder for the Flipper Asset Pack"
-$folderBrowser.SelectedPath = [System.IO.Path]::GetDirectoryName($GifPath)  # Set default to GIF's folder
-if ($folderBrowser.ShowDialog($topForm) -ne [System.Windows.Forms.DialogResult]::OK) {
-    Write-Error "No output folder selected. Exiting."
-    $topForm.Close()
-    exit
-}
-
-# Cleanup the dummy form
-$topForm.Close()
 
 Write-Host "Processing..."
 
-# Sanitize and format the folder name
-Write-Verbose "Sanitizing folder name"
-$selectedFolder = $folderBrowser.SelectedPath
+# Sanitize and format the output folder name
+Write-Verbose "Sanitizing output folder name"
 $folderName = [System.IO.Path]::GetFileName($selectedFolder)
 $parentPath = [System.IO.Path]::GetDirectoryName($selectedFolder)
 $sanitizedFolderName = ($folderName -replace '\s+', '_')
@@ -185,74 +220,111 @@ try {
         exit
     }
 
-    # Step 1: Extract and convert frames to monochrome .png
-    $tempPngDir = Join-Path $OutputFolder "_temp_png"
-    if (-not (Test-Path $tempPngDir)) {
-        New-Item -ItemType Directory -Path $tempPngDir | Out-Null
+    Write-Verbose "Validating mkbitmap.exe client app exists"
+    $mkbitmap = Join-Path $PSScriptRoot "mkbitmap.exe"
+    if (-not (Test-Path $mkbitmap)) {
+        Write-Error "mkbitmap.exe not found in script folder. Please include portable mkbitmap (mkbitmap.exe in the same folder as this script)."
+        exit
     }
 
-    $framePattern = Join-Path $tempPngDir "frame_%d.png"
-    Write-Verbose "Splitting and converting .gif into monochrome .png frames..."
-    # Build MagickVisualArgs from user options
-    $MagickVisualArgs = "-coalesce -gravity center -crop 2:1 -resize 128x64^!"
-    if ($ContrastStretch) { $MagickVisualArgs += " -contrast-stretch $ContrastStretch" }
-    if ($Sharpen)   { $MagickVisualArgs += " -sharpen $SharpenAmount" }
-    if ($Dither)    { $MagickVisualArgs += " -dither FloydSteinberg" }
-    if ($Grayscale) { $MagickVisualArgs += " -colorspace Gray" }
-    if ($Monochrome){ $MagickVisualArgs += " -monochrome" }
-    if ($EdgeDetection) { $MagickVisualArgs += " -edge 1 -normalize" }
-    if ($Invert)        { $MagickVisualArgs += " -negate" }
+    Write-Verbose "Validating potrace.exe client app exists"
+    $potrace = Join-Path $PSScriptRoot "potrace.exe"
+    if (-not (Test-Path $potrace)) {
+        Write-Error "potrace.exe not found in script folder. Please include portable potrace (potrace.exe in the same folder as this script)."
+        exit
+    }
 
-    & $magick $GifPath $MagickVisualArgs.Split(' ') $framePattern
+    Write-Verbose "Splitting and converting .gif into .png frames..."
+
+    & $magick $GifPath -coalesce "$(Join-Path $WorkingDir "frame_%d.pbm")"
 
     # Step 2: Process PNGs into .bm files
-    $pngFiles = Get-ChildItem -Path $tempPngDir -Filter "frame_*.png" | Sort-Object Name
+    $pngFiles = Get-ChildItem -Path $WorkingDir -Filter "frame_*.pbm" | Sort-Object Name
     $index = 0
     $FrameOrder = ""
 
     Write-Verbose "Processing png files"
     foreach ($file in $pngFiles) {
-        $inputPath = $file.FullName
-        $outputPath = Join-Path $OutputFolder ("frame_$index.bm")
+        $PGMFile = "$WorkingDir\frame_$($index).pgm"
+        $PBMFile = "$WorkingDir\frame_$($index).pbm"
+        $PNGFile = "$WorkingDir\frame_$($index).png"
+        $SVGFile = "$WorkingDir\frame_$($index).svg"
+        $PreviewFile = "$WorkingDir\preview_$($index).png"
+        $BMFile = "$OutputFolder\frame_$($index).bm"
+        
+        Write-Verbose "Converting .png into .svg vector graphic using potrace"
+        & $Potrace "$($file.FullName)" -b svg -o "$SVGFile"
 
-        $bitmap = [System.Drawing.Bitmap]::FromFile($inputPath)
-        $forcedBitmap = $bitmap.Clone([System.Drawing.Rectangle]::FromLTRB(0, 0, $bitmap.Width, $bitmap.Height), [System.Drawing.Imaging.PixelFormat]::Format1bppIndexed)
-        $bitmap.Dispose()
-        $bitmap = $forcedBitmap
+        Write-Verbose "Applying immage effects using ImageMagick"
+        $MagickArgs = @(
+            "$SVGFile",
+            "-sharpen","2x1",
+            "-colorspace","gray",
+            "$PGMFile"
+        )
+
+        & $magick @MagickArgs
+    
+        Write-Verbose "Using mkbitmap to apply image effects and conver to .pgm"
+        & $Mkbitmap -x -t $Binarization -o "$PBMFile" "$PGMFile"
+    
+        Write-Verbose "Using ImageMagick to crop and resize .pbm back to .png file"
+        $MagickArgs = @(
+            "$PBMFile",
+            $(if ($EdgeDetection) {@("-edge","$EdgeDetection")})
+            "$(if ($Invert) {"-negate"})"
+            "$(if ($Monochrome) {"-monochrome"})"
+            "-resize","128x64",
+            "-gravity","center",
+            "-extent","128x64",
+            "$PNGFile"
+        )
+
+        & $magick @MagickArgs
+
+        Write-Verbose "Coverting .png to .bm flipper file"
+        $bitmap = [System.Drawing.Bitmap]::FromFile("$PNGFile")
 
         $width = $bitmap.Width
         $height = $bitmap.Height
         $rawBytes = New-Object System.Collections.Generic.List[Byte]
-
+        
         for ($y = 0; $y -lt $height; $y++) {
             $bitBuffer = 0
             $bitCount = 0
-
+        
             for ($x = 0; $x -lt $width; $x++) {
                 $color = $bitmap.GetPixel($x, $y)
-                $bit = if ($color.R -eq 0) { 1 } else { 0 }
+                $bit = if ($color.R -eq 0) { 0 } else { 1 }
                 $bitBuffer = $bitBuffer -bor ($bit -shl $bitCount)
                 $bitCount++
-
+        
                 if ($bitCount -eq 8) {
                     $rawBytes.Add([byte]$bitBuffer)
                     $bitBuffer = 0
                     $bitCount = 0
                 }
             }
+        
             if ($bitCount -gt 0) {
                 $rawBytes.Add([byte]$bitBuffer)
             }
         }
-
+        
+        # Finalize .bm with 0x00 header
         $finalBytes = New-Object System.Collections.Generic.List[Byte]
         $finalBytes.Add(0x00)
         $finalBytes.AddRange($rawBytes)
-        [System.IO.File]::WriteAllBytes($outputPath, $finalBytes.ToArray())
+        [System.IO.File]::WriteAllBytes($BMFile, $finalBytes.ToArray())
+        
+        # Invert colors if user wants a preview gif
+        if ($PreviewGif) {    
+            & $magick "$PNGFile" -negate "$PreviewFile"
+        }
 
-        Write-Verbose "Created: frame_$index.bm"
         $FrameOrder += "$index "
         $index++
+        # Cleanup
         $bitmap.Dispose()
     }
 
@@ -279,6 +351,7 @@ Bubble slots: $([int]($BubbleText -ne ""))
     # Ensure the meta.txt file is utf-8 encoded
     Write-Verbose "Enconding meta file"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
     [System.IO.File]::WriteAllText((Join-Path $OutputFolder "meta.txt"), $MetaContent, $utf8NoBom)
 
     # Append bubble configuration if provided
@@ -329,8 +402,20 @@ Bubble slots: $([int]($BubbleText -ne ""))
         Add-Content -Path (Join-Path $OutputFolder "meta.txt") -Value "EndFrame: $EndFrame"
     }
 
-    # Optional cleanup
-    Remove-Item -Path $tempPngDir -Recurse -Force
+    if ($PreviewGif) {
+        # Make Sample gif
+        Write-Verbose "Making preview gif"
+        $FrameFiles = Get-ChildItem -Path $WorkingDir -Filter "preview_*.png" | Sort-Object | ForEach-Object {$_.fullname}
+        #& $magick -delay 25 -loop 0 "$($FrameFiles.FullName)" "$WorkingDir\preview.gif"
+        $gifArgs = @('-delay', '25', '-loop', '0') + $FrameFiles + "$WorkingDir\preview.gif"
+        & $magick @gifArgs
+
+        ."$WorkingDir\preview.gif"
+        #Get-ChildItem -Path $WorkingDir -Filter preview_* | Remove-Item -Force
+    }
+
+    # Cleanup
+    Get-ChildItem -Path $WorkingDir -Filter frame_* | Remove-Item -Force
 
     Write-Host -ForegroundColor Green "Asset pack successfully created in: $OutputFolder"
 }
