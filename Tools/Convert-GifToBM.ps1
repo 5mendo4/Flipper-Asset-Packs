@@ -155,6 +155,7 @@ if (!$GifPath -or !$OutputFolder) {
             exit
         }
         $GifPath = $openFileDialog.FileName
+        $WorkingDir = Split-Path $GifPath
     }
     else {
         if (Test-Path $GifPath) {
